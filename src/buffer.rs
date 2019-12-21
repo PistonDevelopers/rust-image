@@ -86,23 +86,11 @@ pub trait Pixel: Copy + Clone {
     /// that the slice is long enough to present panics if the pixel is used later on.
     fn from_slice_mut(slice: &mut [Self::Subpixel]) -> &mut Self;
 
-    /// Convert this pixel to RGB
-    fn to_rgb(&self) -> Rgb<Self::Subpixel>;
-
     /// Convert this pixel to RGB with an alpha channel
     fn to_rgba(&self) -> Rgba<Self::Subpixel>;
 
-    /// Convert this pixel to luma
-    fn to_luma(&self) -> Luma<Self::Subpixel>;
-
     /// Convert this pixel to luma with an alpha channel
     fn to_luma_alpha(&self) -> LumaA<Self::Subpixel>;
-
-    /// Convert this pixel to BGR
-    fn to_bgr(&self) -> Bgr<Self::Subpixel>;
-
-    /// Convert this pixel to BGR with an alpha channel
-    fn to_bgra(&self) -> Bgra<Self::Subpixel>;
 
     /// Apply the function ```f``` to each channel of this pixel.
     fn map<F>(&self, f: F) -> Self
@@ -158,9 +146,6 @@ pub trait Pixel: Copy + Clone {
     fn apply2<F>(&mut self, other: &Self, f: F)
     where
         F: FnMut(Self::Subpixel, Self::Subpixel) -> Self::Subpixel;
-
-    /// Invert this pixel
-    fn invert(&mut self);
 
     /// Blend the color of a given pixel into ourself, taking into account alpha channels
     fn blend(&mut self, other: &Self);

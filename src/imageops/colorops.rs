@@ -1,8 +1,8 @@
 //! Functions for altering and converting the color of pixelbufs
 
 use buffer::{ImageBuffer, Pixel};
-use color::{Luma, Rgba};
-use image::{GenericImage, GenericImageView};
+use color::{Luma, LumaA, Rgba};
+use image::GenericImageView;
 use math::nq;
 use math::utils::clamp;
 use num_traits::{Num, NumCast};
@@ -24,27 +24,12 @@ where
 
     for y in 0..height {
         for x in 0..width {
-            let p = image.get_pixel(x, y).to_luma();
-            out.put_pixel(x, y, p);
+            let LumaA([l, _]) = image.get_pixel(x, y).to_luma_alpha();
+            out.put_pixel(x, y, Luma([l]));
         }
     }
 
     out
-}
-
-/// Invert each pixel within the supplied image.
-/// This function operates in place.
-pub fn invert<I: GenericImage>(image: &mut I) {
-    let (width, height) = image.dimensions();
-
-    for y in 0..height {
-        for x in 0..width {
-            let mut p = image.get_pixel(x, y);
-            p.invert();
-
-            image.put_pixel(x, y, p);
-        }
-    }
 }
 
 /// Adjust the contrast of the supplied image.
