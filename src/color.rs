@@ -1,6 +1,9 @@
-use std::ops::{Index, IndexMut};
+use std::mem;
+use std::ops::{Deref, DerefMut, Index, IndexMut};
+use std::slice;
 
 use num_traits::{NumCast, ToPrimitive, Zero};
+use rgb::FromSlice;
 
 use crate::traits::{Pixel, Primitive};
 
@@ -205,6 +208,15 @@ macro_rules! define_colors {
         $interpretation: expr,
         $color_type_u8: expr,
         $color_type_u16: expr,
+        (
+            $proxy_ty:ident,
+            [ $( $proxy_cmp:ident ),+ ]
+        ),
+        (
+            $( $rgb_equiv:ident )::*,
+            $from_slice_meth:ident,
+            |$rgb_val:ident| $rgb_val_as_arr:expr
+        ),
         #[$doc:meta];
     )*} => {
 
@@ -282,13 +294,13 @@ impl<T: Primitive + 'static> Pixel for $ident<T> {
 
     fn to_luma(&self) -> Luma<T> {
         let mut pix = Luma([Zero::zero()]);
-        pix.from_color(self);
+        FromColor::from_color(&mut pix, self);
         pix
     }
 
     fn to_luma_alpha(&self) -> LumaA<T> {
         let mut pix = LumaA([Zero::zero(), Zero::zero()]);
-        pix.from_color(self);
+        FromColor::from_color(&mut pix, self);
         pix
     }
 
@@ -364,18 +376,58 @@ impl<T: Primitive + 'static> From<[T; $channels]> for $ident<T> {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Debug, Copy, Hash)]
+#[repr(C)]
+#[allow(missing_docs)]
+pub struct $proxy_ty<T: Primitive> {
+    $(
+        pub $proxy_cmp: T,
+    )+
+}
+
+impl<T: Primitive> Deref for $ident<T> {
+    type Target = $proxy_ty<T>;
+
+    fn deref(&self) -> &Self::Target {
+        debug_assert_eq!(mem::size_of_val(&self.0), mem::size_of::<$proxy_ty<T>>());
+
+        let proxy_slice = unsafe { slice::from_raw_parts(self.0.as_ptr() as *const _, 1) };
+        &proxy_slice[0]
+    }
+}
+
+impl<T: Primitive> DerefMut for $ident<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        debug_assert_eq!(mem::size_of_val(&self.0), mem::size_of::<$proxy_ty<T>>());
+
+        let proxy_slice = unsafe { slice::from_raw_parts_mut(self.0.as_mut_ptr() as *mut _, 1) };
+        &mut proxy_slice[0]
+    }
+}
+
+impl<T: Primitive> From<$( $rgb_equiv )::* <T>> for $ident<T> {
+    fn from($rgb_val: $( $rgb_equiv )::* <T>) -> Self {
+        $ident($rgb_val_as_arr)
+    }
+}
+
+impl<T: Primitive> From<$ident<T>> for $( $rgb_equiv )::* <T> {
+    fn from(value: $ident<T>) -> Self {
+        FromSlice::$from_slice_meth(&value.0[..])[0]
+    }
+}
 )* // END Structure definitions
 
     }
 }
 
 define_colors! {
-    Rgb, 3, 0, "RGB", ColorType::Rgb8, ColorType::Rgb16, #[doc = "RGB colors"];
-    Bgr, 3, 0, "BGR", ColorType::Bgr8, ColorType::Bgr8, #[doc = "BGR colors"];
-    Luma, 1, 0, "Y", ColorType::L8, ColorType::L16, #[doc = "Grayscale colors"];
-    Rgba, 4, 1, "RGBA", ColorType::Rgba8, ColorType::Rgba16, #[doc = "RGB colors + alpha channel"];
-    Bgra, 4, 1, "BGRA", ColorType::Bgra8, ColorType::Bgra8, #[doc = "BGR colors + alpha channel"];
-    LumaA, 2, 1, "YA", ColorType::La8, ColorType::La16, #[doc = "Grayscale colors + alpha channel"];
+    Rgb, 3, 0, "RGB", ColorType::Rgb8, ColorType::Rgb16, (RgbProxy, [r, g, b]), (rgb::RGB, as_rgb, |p| [p.r, p.g, p.b]), #[doc = "RGB colors"];
+    Bgr, 3, 0, "BGR", ColorType::Bgr8, ColorType::Bgr8, (BgrProxy, [b, g, r]), (rgb::alt::BGR, as_bgr, |p| [p.b, p.g, p.r]), #[doc = "BGR colors"];
+    Luma, 1, 0, "Y", ColorType::L8, ColorType::L16, (LumaProxy, [y]), (rgb::alt::Gray, as_gray, |p| [p.0]), #[doc = "Grayscale colors"];
+    Rgba, 4, 1, "RGBA", ColorType::Rgba8, ColorType::Rgba16, (RgbaProxy, [r, g, b, a]), (rgb::RGBA, as_rgba, |p| [p.r, p.g, p.b, p.a]), #[doc = "RGB colors + alpha channel"];
+    Bgra, 4, 1, "BGRA", ColorType::Bgra8, ColorType::Bgra8, (BgraProxy, [b, g, r, a]), (rgb::alt::BGRA, as_bgra, |p| [p.b, p.g, p.r, p.a]), #[doc = "BGR colors + alpha channel"];
+    LumaA, 2, 1, "YA", ColorType::La8, ColorType::La16, (LumaAProxy, [y, a]), (rgb::alt::GrayAlpha, as_gray_alpha, |p| [p.0, p.1]), #[doc = "Grayscale colors + alpha channel"];
 }
 
 /// Provides color conversions for the different pixel types.
@@ -1508,5 +1560,112 @@ mod tests {
         test_lossless_conversion!(LumaA<u8>, LumaA<u16>, LumaA<u8>);
         test_lossless_conversion!(Rgb<u8>, Rgb<u16>, Rgb<u8>);
         test_lossless_conversion!(Rgba<u8>, Rgba<u16>, Rgba<u8>);
+    }
+
+    #[test]
+    fn test_deref_rgb() {
+        let mut rgb = Rgb([1, 2, 3]);
+        assert_eq!([rgb.r, rgb.g, rgb.b], [1, 2, 3]);
+        rgb.r = 4;
+        rgb.g = 5;
+        rgb.b = 6;
+        assert_eq!(rgb, Rgb([4, 5, 6]));
+    }
+
+    #[test]
+    fn test_deref_rgba() {
+        let mut rgba = Rgba([1, 2, 3, 4]);
+        assert_eq!([rgba.r, rgba.g, rgba.b, rgba.a], [1, 2, 3, 4]);
+        rgba.r = 5;
+        rgba.g = 6;
+        rgba.b = 7;
+        rgba.a = 8;
+        assert_eq!(rgba, Rgba([5, 6, 7, 8]));
+    }
+
+    #[test]
+    fn test_deref_bgr() {
+        let mut bgr = Bgr([1, 2, 3]);
+        assert_eq!([bgr.b, bgr.g, bgr.r], [1, 2, 3]);
+        bgr.b = 4;
+        bgr.g = 5;
+        bgr.r = 6;
+        assert_eq!(bgr, Bgr([4, 5, 6]));
+    }
+
+    #[test]
+    fn test_deref_bgra() {
+        let mut bgra = Bgra([1, 2, 3, 4]);
+        assert_eq!([bgra.b, bgra.g, bgra.r, bgra.a], [1, 2, 3, 4]);
+        bgra.b = 5;
+        bgra.g = 6;
+        bgra.r = 7;
+        bgra.a = 8;
+        assert_eq!(bgra, Bgra([5, 6, 7, 8]));
+    }
+
+    #[test]
+    fn test_deref_luma() {
+        let mut luma = Luma([1]);
+        assert_eq!([luma.y], [1]);
+        luma.y = 2;
+        assert_eq!(luma, Luma([2]));
+    }
+
+    #[test]
+    fn test_deref_luma_a() {
+        let mut luma_a = LumaA([1, 2]);
+        assert_eq!([luma_a.y, luma_a.a], [1, 2]);
+        luma_a.y = 3;
+        luma_a.a = 4;
+        assert_eq!(luma_a, LumaA([3, 4]));
+    }
+
+    #[test]
+    fn test_from_rgb() {
+        let pix = Rgb([1, 2, 3]);
+        let rgb_pix = rgb::RGB::from(pix.clone());
+        assert_eq!(rgb_pix, rgb::RGB { r: 1, g: 2, b: 3});
+        assert_eq!(Rgb::from(rgb_pix), pix);
+    }
+
+    #[test]
+    fn test_from_rgba() {
+        let pix = Rgba([1, 2, 3, 4]);
+        let rgb_pix = rgb::RGBA::from(pix.clone());
+        assert_eq!(rgb_pix, rgb::RGBA { r: 1, g: 2, b: 3, a: 4 });
+        assert_eq!(Rgba::from(rgb_pix), pix);
+    }
+
+    #[test]
+    fn test_from_bgr() {
+        let pix = Bgr([1, 2, 3]);
+        let rgb_pix = rgb::alt::BGR::from(pix.clone());
+        assert_eq!(rgb_pix, rgb::alt::BGR { b: 1, g: 2, r: 3 });
+        assert_eq!(Bgr::from(rgb_pix), pix);
+    }
+    
+    #[test]
+    fn test_from_bgra() {
+        let pix = Bgra([1, 2, 3, 4]);
+        let rgb_pix = rgb::alt::BGRA::from(pix.clone());
+        assert_eq!(rgb_pix, rgb::alt::BGRA { b: 1, g: 2, r: 3, a: 4 });
+        assert_eq!(Bgra::from(rgb_pix), pix);
+    }
+
+    #[test]
+    fn test_from_luma() {
+        let pix = Luma([1]);
+        let rgb_pix = rgb::alt::Gray::from(pix.clone());
+        assert_eq!(rgb_pix, rgb::alt::Gray(1));
+        assert_eq!(Luma::from(rgb_pix), pix);
+    }
+
+    #[test]
+    fn test_from_luma_a() {
+        let pix = LumaA([1, 2]);
+        let rgb_pix = rgb::alt::GrayAlpha::from(pix.clone());
+        assert_eq!(rgb_pix, rgb::alt::GrayAlpha(1, 2));
+        assert_eq!(LumaA::from(rgb_pix), pix);
     }
 }
