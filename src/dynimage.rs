@@ -3,24 +3,12 @@ use std::io::Write;
 use std::path::Path;
 use std::u32;
 
-#[cfg(feature = "bmp")]
-use crate::codecs::bmp;
 #[cfg(feature = "gif")]
 use crate::codecs::gif;
-#[cfg(feature = "ico")]
-use crate::codecs::ico;
-#[cfg(feature = "jpeg")]
-use crate::codecs::jpeg;
 #[cfg(feature = "png")]
 use crate::codecs::png;
 #[cfg(feature = "pnm")]
 use crate::codecs::pnm;
-#[cfg(feature = "farbfeld")]
-use crate::codecs::farbfeld;
-#[cfg(feature = "tga")]
-use crate::codecs::tga;
-#[cfg(feature = "avif")]
-use crate::codecs::avif;
 
 use crate::buffer_::{
     BgrImage, BgraImage, ConvertBuffer, GrayAlphaImage, GrayAlpha16Image,
@@ -28,11 +16,10 @@ use crate::buffer_::{
     Rgba16Image,
 };
 use crate::color::{self, IntoColor};
-use crate::error::{ImageError, ImageFormatHint, ImageResult, ParameterError, ParameterErrorKind, UnsupportedError, UnsupportedErrorKind};
+use crate::error::{ImageError, ImageResult, ParameterError, ParameterErrorKind};
 use crate::flat::FlatSamples;
 use crate::image;
 use crate::image::{GenericImage, GenericImageView, ImageDecoder, ImageFormat, ImageOutputFormat};
-use crate::image::ImageEncoder;
 use crate::io::free_functions;
 use crate::imageops;
 use crate::math::resize_dimensions;
@@ -896,6 +883,8 @@ impl DynamicImage {
     }
 
     /// Encode this image and write it to ```w```
+    /// **Note**: TIFF encoding uses buffered writing,
+    /// which can lead to unexpected use of resources
     pub fn write_to<W: Write, F: Into<ImageOutputFormat>>(
         &self,
         w: &mut W,
@@ -956,13 +945,6 @@ impl DynamicImage {
                 Ok(())
             }
 
-            #[cfg(feature = "jpeg")]
-            image::ImageOutputFormat::Jpeg(quality) => {
-                let j = jpeg::JpegEncoder::new_with_quality(w, quality);
-                j.write_image(bytes, width, height, color)?;
-                Ok(())
-            }
-
             #[cfg(feature = "gif")]
             image::ImageOutputFormat::Gif => {
                 let mut g = gif::GifEncoder::new(w);
@@ -970,42 +952,7 @@ impl DynamicImage {
                 Ok(())
             }
 
-            #[cfg(feature = "ico")]
-            image::ImageOutputFormat::Ico => {
-                let i = ico::IcoEncoder::new(w);
-                i.encode(bytes, width, height, color)?;
-                Ok(())
-            }
-
-            #[cfg(feature = "bmp")]
-            image::ImageOutputFormat::Bmp => {
-                let mut b = bmp::BmpEncoder::new(w);
-                b.encode(bytes, width, height, color)?;
-                Ok(())
-            }
-
-            #[cfg(feature = "farbfeld")]
-            image::ImageOutputFormat::Farbfeld => {
-                farbfeld::FarbfeldEncoder::new(w).write_image(bytes, width, height, color)
-            }
-
-            #[cfg(feature = "tga")]
-            image::ImageOutputFormat::Tga => {
-                tga::TgaEncoder::new(w).write_image(bytes, width, height, color)
-            }
-
-            #[cfg(feature = "avif")]
-            image::ImageOutputFormat::Avif => {
-                avif::AvifEncoder::new(w).write_image(bytes, width, height, color)
-            }
-
-            image::ImageOutputFormat::Unsupported(msg) => {
-                Err(ImageError::Unsupported(UnsupportedError::from_format_and_kind(
-                    ImageFormatHint::Unknown,
-                    UnsupportedErrorKind::Format(ImageFormatHint::Name(msg)))))
-            },
-
-            image::ImageOutputFormat::__NonExhaustive(marker) => match marker._private {},
+            format => write_buffer_with_format(w, bytes, width, height, color, format)
         }
     }
 
@@ -1156,10 +1103,6 @@ fn decoder_to_image<'a, I: ImageDecoder<'a>>(decoder: I) -> ImageResult<DynamicI
             let buf = image::decoder_to_vec(decoder)?;
             ImageBuffer::from_raw(w, h, buf).map(DynamicImage::ImageLumaA16)
         }
-        _ => return Err(ImageError::Unsupported(UnsupportedError::from_format_and_kind(
-            ImageFormatHint::Unknown,
-            UnsupportedErrorKind::Color(color_type.into()),
-        ))),
     };
     match image {
         Some(image) => Ok(image),
@@ -1290,6 +1233,34 @@ where
 {
     // thin wrapper function to strip generics
     free_functions::save_buffer_with_format_impl(path.as_ref(), buf, width, height, color, format)
+}
+
+/// Writes the supplied buffer to a writer in the specified format.
+///
+/// The buffer is assumed to have the correct format according
+/// to the specified color type.
+/// This will lead to corrupted writers if the buffer contains
+/// malformed data.
+///
+/// See [`ImageOutputFormat`](../enum.ImageOutputFormat.html) for
+/// supported types.
+///
+/// **Note**: TIFF encoding uses buffered writing,
+/// which can lead to unexpected use of resources
+pub fn write_buffer_with_format<W, F>(
+    writer: &mut W,
+    buf: &[u8],
+    width: u32,
+    height: u32,
+    color: color::ColorType,
+    format: F,
+) -> ImageResult<()>
+where
+    W: std::io::Write,
+    F: Into<ImageOutputFormat>,
+{
+    // thin wrapper function to strip generics
+    free_functions::write_buffer_impl(writer, buf, width, height, color, format.into())
 }
 
 /// Create a new image from a byte slice
